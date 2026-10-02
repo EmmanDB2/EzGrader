@@ -1,0 +1,22 @@
+# Student data (FERPA). Never commit any of these.
+backups/
+ed_exports/
+exports/
+*.csv
+# The synthetic test fixtures are fake people and safe to commit.
+!tests/fixtures/*.csv
+# Real (anonymized) Ed exports. Scores and timestamps are still student data.
+/fixtures/
+
+# Secrets and local environment
+.env
+.env.*
+.venv/
+venv/
+
+# Python / tooling
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+.idea/
