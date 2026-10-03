@@ -32,7 +32,7 @@ Your browser opens at `http://127.0.0.1:8765/`. Stop the app with Ctrl+C. Option
 python app.py --demo
 ```
 
-Demo mode uses fake students, a fake Ed, a fake Canvas, and an in-memory keyring. Push, retry, and revert all work, and nothing real is touched.
+Demo mode uses fake students, a fake Ed, a fake Canvas, and an in-memory keyring. Canvas pushes, style grading, retries, and reverts all work, and nothing real is touched.
 
 ## First time: add your keys
 
@@ -68,11 +68,30 @@ Press **Test** after saving each one. Other TAs on the same Mac can add their ow
 - Excused students and students not on the assignment are always skipped.
 - Pass/fail and ungraded assignments are refused.
 
+## Style grading (Ed rubrics)
+
+Use the **Style grading** switch in the top bar to grade the style points on Ed code slides (the "30 style" in "70 auto, 30 style") without clicking through Ed's marking panel. Style grading only needs your Ed token.
+
+1. Pick the **Ed course → lesson → code slide**, then **Load**. EzGrader lists every student with a submission on that slide and reads their marking record from Ed.
+2. The **To grade** queue holds students with no style mark in Ed yet. Open one to see their code (read from Ed's code server, exactly as Ed's site opens it) next to the slide's rubric.
+3. Click rubric items, or press **1–9**. In a "pick one" section, choosing an item replaces the previous one. Each choice is a **draft**; nothing is saved yet. **J / K** move to the next or previous student.
+4. **Review drafts** lists every student's selection in Ed now → your draft. Tick the confirmation and **Write to Ed**: EzGrader selects those rubric items on each student's marking record, the same as ticking them in Ed, then shows what Ed saved.
+5. **Revert last write** puts back the selections Ed had before the write.
+
+Safety:
+
+- Ed's current selections are backed up (in `backups/`) before anything is written.
+- Right before writing, EzGrader re-reads each student's selection and skips anyone graded in Ed since you loaded the slide, so it never overwrites another TA's marks.
+- Students' code stays in memory only. It isn't written to disk.
+- Opening a student's code makes Ed create a temporary copy of that submission, as it does when you click on it in Ed. EzGrader only ever lists and opens files there; anything else is refused in code.
+
+Once the style marks are in Ed, switch to **Canvas sync** and load the lesson as usual: the style points are part of Ed's scores.
+
 ## Files and data
 
 | Path | What | In git? |
 |---|---|---|
-| `backups/` | JSON snapshot of Canvas grades before each push/revert (names, emails, grades; mode 600) | **ignored** |
+| `backups/` | JSON snapshots taken before each push, style write, and revert (names, emails, grades; mode 600) | **ignored** |
 | `fixtures/` | Your real (anonymized) Ed exports | **ignored** |
 | `tests/fixtures/` | Synthetic exports with fake students | yes |
 
@@ -103,6 +122,8 @@ ezgrader/
   ed_parser.py          results.csv → slides, students, totals
   canvas_client.py      Canvas API (reads + grade updates)
   grades.py             score formula, matching, flags, review rows
+  style.py              style grading: code slides, rubrics, students' marking status
+  code_server.py        reads a submission's files from Ed's code server (list + open only)
   keystore.py           profiles + tokens in the macOS Keychain
   backups.py            pre-push backups for revert
   server.py             Flask JSON API + request guards + push/revert jobs

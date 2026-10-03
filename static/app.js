@@ -32,6 +32,7 @@
 
   const state = {
     profile: null,
+    mode: "canvas",      // "canvas" (sync to Canvas) or "style" (grade style on Ed)
     profiles: [],
     data: null,          // /api/load response
     ids: null,           // what's loaded: {lesson_id, canvas_course_id, assignment_id}
@@ -170,10 +171,15 @@
 
   function updateEmptyState() {
     const p = currentProfile();
+    const styleMode = state.mode === "style";
     const missing = [];
     if (p && !p.ed_token) missing.push("an Ed token");
-    if (p && !p.canvas_base_url) missing.push("your Canvas address");
-    if (p && !p.canvas_token) missing.push("a Canvas token");
+    if (p && !styleMode && !p.canvas_base_url) missing.push("your Canvas address");
+    if (p && !styleMode && !p.canvas_token) missing.push("a Canvas token");
+    $("emptyState").querySelector(".steps").innerHTML = (styleMode
+      ? ["Open each student's code", "Pick rubric items", "Confirm &amp; write to Ed"]
+      : ["Load scores from Ed", "Review &amp; adjust", "Confirm &amp; push"])
+      .map((text, i) => `<li><span>${i + 1}</span>${text}</li>`).join("");
     const showKeys = !p || missing.length > 0;
     $("emptyKeysBtn").hidden = !showKeys;
     if (!p) {
@@ -182,6 +188,9 @@
     } else if (missing.length) {
       $("emptyTitle").textContent = "Almost there";
       $("emptyText").textContent = `Add ${missing.join(", ").replace(/, ([^,]*)$/, " and $1")} to this profile.`;
+    } else if (styleMode) {
+      $("emptyTitle").textContent = "Grade style on Ed code slides";
+      $("emptyText").innerHTML = "Pick an Ed lesson and a code slide above, then press <b>Load</b>. You'll see each student's code next to the slide's rubric. Nothing is saved to Ed until you review and confirm.";
     } else {
       $("emptyTitle").textContent = "Sync Ed lesson scores to Canvas";
       $("emptyText").innerHTML = "Pick an Ed lesson and a Canvas assignment above, then press <b>Load</b>. Nothing goes to Canvas until you review and confirm.";
@@ -194,6 +203,7 @@
     const last = lastPicks();
     setOptions($("edLesson"), [], { placeholder: "Pick a course first" });
     setOptions($("cvAssignment"), [], { placeholder: "Pick a course first" });
+    resetStyleSlides();
     const tasks = [];
     if (p?.ed_token) tasks.push(loadEdCourses(last.edCourse));
     else setOptions($("edCourse"), [], { placeholder: p ? "Add an Ed token under Keys" : "No profile yet" });
@@ -221,6 +231,7 @@
 
   async function loadEdLessons(courseId) {
     const sel = $("edLesson");
+    resetStyleSlides();
     setLoadingSelect(sel);
     try {
       const { lessons } = await api("GET", `/api/ed/courses/${encodeURIComponent(courseId)}/lessons`);
@@ -271,7 +282,8 @@
   }
 
   function updateLoadButton() {
-    $("loadBtn").disabled = !["edCourse", "edLesson", "cvCourse", "cvAssignment"].every((id) => $(id).value);
+    const needed = state.mode === "style" ? ["edCourse", "edLesson", "styleSlide"] : ["edCourse", "edLesson", "cvCourse", "cvAssignment"];
+    $("loadBtn").disabled = !needed.every((id) => $(id).value);
   }
 
   // ---------- loading the review
@@ -283,12 +295,8 @@
     state.edits.clear();
     state.pushResults.clear();
     state.maxOverride = null;
-    $("toolbar").hidden = true;
-    $("tableWrap").hidden = true;
-    $("unmatchedView").hidden = true;
-    $("actionbar").hidden = true;
-    $("emptyState").hidden = false;
-    setSetupCollapsed(false);
+    resetStyle();
+    refreshMainView();
   }
 
   async function loadReview(ids) {
@@ -325,10 +333,16 @@
   }
 
   function setSetupCollapsed(collapsed) {
-    const show = collapsed && !!state.data;
+    const styleMode = state.mode === "style";
+    const loaded = styleMode ? !!st.data : !!state.data;
+    const show = collapsed && loaded;
     $("setupForm").hidden = show;
     $("setupSummary").hidden = !show;
-    if (state.data) {
+    if (!loaded) return;
+    if (styleMode) {
+      $("sumLesson").textContent = st.labels.lesson || "Lesson";
+      $("sumSlide").textContent = `${st.labels.slide} · ${fmt(st.data.challenge.rubric_points)} style pts`;
+    } else {
       $("sumLesson").textContent = state.labels.lesson || `Lesson ${state.ids.lesson_id}`;
       $("sumAssignment").textContent = `${state.labels.assignment} · ${fmt(state.data.assignment.points_possible)} pts`;
     }
@@ -389,9 +403,7 @@
   // ---------- rendering
 
   function renderAll() {
-    $("emptyState").hidden = true;
-    $("toolbar").hidden = false;
-    $("actionbar").hidden = false;
+    refreshMainView();
     renderMax(true);
     renderWarnings();
     renderFilters();
@@ -404,18 +416,19 @@
 
   function renderView() {
     const grades = state.view === "grades";
+    const showCanvas = state.mode === "canvas" && !!state.data;
     document.querySelectorAll(".tab").forEach((t) => {
       const active = t.dataset.view === state.view;
       t.classList.toggle("active", active);
       t.setAttribute("aria-selected", String(active));
     });
-    $("tableWrap").hidden = !grades;
+    $("tableWrap").hidden = !(showCanvas && grades);
     $("gradeTools").hidden = !grades;
-    $("unmatchedView").hidden = grades;
+    $("unmatchedView").hidden = !(showCanvas && !grades);
   }
 
   function renderFilters() {
-    document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.filter === state.filter));
+    document.querySelectorAll(".chip[data-filter]").forEach((c) => c.classList.toggle("active", c.dataset.filter === state.filter));
     $("slidesBtn").setAttribute("aria-pressed", String(state.showSlides));
   }
 
@@ -1036,7 +1049,7 @@
     $("emptyKeysBtn").addEventListener("click", openKeys);
 
     $("profileSelect").addEventListener("change", (e) => {
-      if (state.edits.size && !confirm("Switching profiles clears your edits in this review. Continue?")) {
+      if ((state.edits.size || st.drafts.size) && !confirm("Switching profiles clears your unsaved edits and drafts. Continue?")) {
         e.target.value = state.profile;
         return;
       }
@@ -1045,24 +1058,31 @@
 
     $("edCourse").addEventListener("change", (e) => { savePick("edCourse", e.target.value); loadEdLessons(e.target.value); });
     $("cvCourse").addEventListener("change", (e) => { savePick("cvCourse", e.target.value); loadAssignments(e.target.value); });
-    $("edLesson").addEventListener("change", updateLoadButton);
+    $("edLesson").addEventListener("change", (e) => { updateLoadButton(); onLessonChanged(e.target.value); });
     $("cvAssignment").addEventListener("change", updateLoadButton);
     $("setupForm").addEventListener("submit", (e) => {
       e.preventDefault();
+      if (state.mode === "style") {
+        loadStyle(Number($("styleSlide").value));
+        return;
+      }
       loadReview({
         lesson_id: Number($("edLesson").value),
         canvas_course_id: Number($("cvCourse").value),
         assignment_id: Number($("cvAssignment").value),
       });
     });
-    $("reloadBtn").addEventListener("click", () => state.ids && loadReview(state.ids));
+    $("reloadBtn").addEventListener("click", () => {
+      if (state.mode === "style") { if (st.challengeId) loadStyle(st.challengeId); }
+      else if (state.ids) loadReview(state.ids);
+    });
     $("changeBtn").addEventListener("click", () => setSetupCollapsed(false));
 
     document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
       state.view = t.dataset.view;
       renderView();
     }));
-    document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => {
+    document.querySelectorAll(".chip[data-filter]").forEach((c) => c.addEventListener("click", () => {
       state.filter = c.dataset.filter;
       renderFilters();
       renderBody();
@@ -1177,7 +1197,7 @@
     rv.addEventListener("click", (e) => { if (e.target.id === "doRevert") startRevert(); });
 
     // Shared dialog behaviour: [data-close] buttons; no closing mid-push.
-    for (const dlg of [rd, rv, $("keysDialog")]) {
+    for (const dlg of [rd, rv, $("keysDialog"), $("styleWriteDialog"), $("styleRevertDialog")]) {
       dlg.addEventListener("click", (e) => {
         const closer = e.target.closest("[data-close]");
         if (!closer || isBusy(dlg)) return;
@@ -1218,14 +1238,687 @@
     });
 
     window.addEventListener("beforeunload", (e) => {
-      if (state.edits.size || review?.running || revert?.running) e.preventDefault();
+      if (state.edits.size || st.drafts.size || review?.running || revert?.running || sw?.running || srv?.running) {
+        e.preventDefault();
+      }
     });
+    bindStyleEvents();
   }
 
   function isBusy(dlg) {
     if (dlg.id === "reviewDialog") return !!review?.running;
     if (dlg.id === "revertDialog") return !!revert?.running;
+    if (dlg.id === "styleWriteDialog") return !!sw?.running;
+    if (dlg.id === "styleRevertDialog") return !!srv?.running;
     return false;
+  }
+
+  // ---------- modes
+
+  function setMode(mode) {
+    state.mode = mode === "style" ? "style" : "canvas";
+    document.body.dataset.mode = state.mode;
+    storage.set("ezgrader.mode", state.mode);
+    document.querySelectorAll(".mode").forEach((b) => {
+      const active = b.dataset.mode === state.mode;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-selected", String(active));
+    });
+    const lesson = $("edLesson").value;
+    if (state.mode === "style" && lesson && st.slidesLesson !== lesson) loadStyleSlides(lesson);
+    refreshMainView();
+    updateLoadButton();
+  }
+
+  function refreshMainView() {
+    const styleMode = state.mode === "style";
+    const loaded = styleMode ? !!st.data : !!state.data;
+    $("emptyState").hidden = loaded;
+    $("toolbar").hidden = styleMode || !state.data;
+    $("styleView").hidden = !(styleMode && st.data);
+    $("actionbar").hidden = !loaded;
+    renderView();
+    updateEmptyState();
+    setSetupCollapsed(loaded);
+  }
+
+  // ---------- style grading: Ed rubrics on code slides
+
+  const st = {
+    slides: [],
+    slidesLesson: null,
+    data: null,          // /api/style/challenges/:id
+    key: null,
+    challengeId: null,
+    byId: new Map(),
+    items: new Map(),    // rubric item id -> {item, section}
+    drafts: new Map(),   // user id -> Set of rubric item ids
+    filter: "todo",
+    search: "",
+    current: null,
+    submission: new Map(),
+    files: new Map(),    // submission id -> "loading" | {files} | {error}
+    fileTab: 0,
+    results: new Map(),
+    backups: [],
+    labels: {},
+  };
+  let sw = null;   // write dialog
+  let srv = null;  // revert dialog
+
+  const sameSet = (a, b) => {
+    const x = new Set(a), y = new Set(b);
+    return x.size === y.size && [...x].every((v) => y.has(v));
+  };
+  const signed = (n) => (n > 0 ? `+${fmt(n)}` : fmt(n));
+  const shortText = (text, n = 60) => {
+    const t = String(text || "").replace(/\s+/g, " ").trim();
+    return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  };
+  const slideLabel = (s) => `#${s.number} ${String(s.title).replace(/\s*\[[^\]]*\]\s*$/, "")}`;
+  const selectionOf = (s) => st.drafts.get(s.user_id) || new Set(s.selected_ids);
+  const pointsOf = (ids) => [...ids].reduce((sum, id) => sum + (st.items.get(id)?.item.points || 0), 0);
+  const isTodo = (s) => !s.graded && !st.drafts.has(s.user_id) && !!s.lesson_mark_id && !s.error;
+  const currentStudent = () => st.byId.get(st.current) || null;
+  const currentSubmissionId = (s) => (s ? st.submission.get(s.user_id) ?? s.submissions[0]?.id ?? null : null);
+  const orderedItems = () => {
+    const r = st.data?.rubric;
+    return r ? [...r.sections.flatMap((sec) => sec.items), ...r.loose_items] : [];
+  };
+
+  function resetStyle() {
+    Object.assign(st, { data: null, key: null, challengeId: null, byId: new Map(), items: new Map(), current: null, backups: [] });
+    st.drafts.clear();
+    st.results.clear();
+    st.submission.clear();
+    st.files.clear();
+  }
+
+  function resetStyleSlides(placeholder = "Pick a lesson first") {
+    st.slides = [];
+    st.slidesLesson = null;
+    setOptions($("styleSlide"), [], { placeholder });
+  }
+
+  function onLessonChanged(lessonId) {
+    if (state.mode === "style") loadStyleSlides(lessonId);
+    else resetStyleSlides();
+  }
+
+  async function loadStyleSlides(lessonId) {
+    const sel = $("styleSlide");
+    if (!lessonId) {
+      resetStyleSlides();
+      updateLoadButton();
+      return;
+    }
+    st.slidesLesson = String(lessonId);
+    setLoadingSelect(sel);
+    try {
+      const { slides } = await api("GET", `/api/style/lessons/${encodeURIComponent(lessonId)}/slides`);
+      if (st.slidesLesson !== String(lessonId)) return;  // a newer pick won
+      st.slides = slides;
+      setOptions(sel, slides.map((s) => ({ value: s.challenge_id, label: slideLabel(s) })),
+        { placeholder: slides.length ? "Choose a code slide" : "No code slides in this lesson" });
+    } catch (e) {
+      st.slidesLesson = null;
+      setOptions(sel, [], { placeholder: "Couldn't load slides" });
+      toast(e.message, "error");
+    }
+    updateLoadButton();
+  }
+
+  async function loadStyle(challengeId) {
+    if (!challengeId) return;
+    const buttons = [$("loadBtn"), $("reloadBtn")];
+    buttons.forEach((b) => b.classList.add("loading"));
+    try {
+      const data = await api("GET", `/api/style/challenges/${encodeURIComponent(challengeId)}`);
+      const key = `${state.profile}:${challengeId}`;
+      if (key !== st.key) {
+        resetStyle();
+        st.filter = "todo";
+        st.search = "";
+        $("styleSearch").value = "";
+        const slide = st.slides.find((s) => s.challenge_id === challengeId);
+        st.labels = { lesson: selectedText($("edLesson")), slide: slide ? slideLabel(slide) : data.challenge.title };
+      }
+      st.data = data;
+      st.key = key;
+      st.challengeId = challengeId;
+      st.byId = new Map(data.students.map((s) => [s.user_id, s]));
+      st.items = new Map();
+      if (data.rubric) {
+        for (const section of data.rubric.sections) for (const item of section.items) st.items.set(item.id, { item, section });
+        for (const item of data.rubric.loose_items) st.items.set(item.id, { item, section: null });
+      }
+      // Drafts that Ed now matches (written, or graded elsewhere the same way) are done.
+      for (const [uid, sel] of [...st.drafts]) {
+        const s = st.byId.get(uid);
+        if (!s || sameSet(sel, s.selected_ids)) st.drafts.delete(uid);
+      }
+      if (!st.byId.has(st.current)) st.current = (queueStudents()[0] || data.students[0])?.user_id ?? null;
+      refreshMainView();
+      renderStyle();
+      refreshStyleBackups();
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      buttons.forEach((b) => b.classList.remove("loading"));
+    }
+  }
+
+  function statusOf(s) {
+    const result = st.results.get(s.user_id);
+    if (s.error) return { cls: "bad", text: "Couldn't load" };
+    if (!s.lesson_mark_id) return { cls: "muted", text: "No mark record" };
+    if (st.drafts.has(s.user_id)) return { cls: "draft", text: `Draft ${signed(pointsOf(st.drafts.get(s.user_id)))}` };
+    if (result && !result.ok) return { cls: "bad", text: "Write failed" };
+    if (s.graded) return { cls: "ok", text: `Graded ${fmt(s.rubric_mark)}` };
+    return { cls: "todo", text: "To grade" };
+  }
+
+  function queueStudents() {
+    const q = st.search.trim().toLowerCase();
+    return st.data.students.filter((s) => {
+      if (s.user_id === st.current && !q) return true;  // keep the open student in place
+      if (q && !`${s.name} ${s.email}`.toLowerCase().includes(q)) return false;
+      if (st.filter === "todo") return isTodo(s);
+      if (st.filter === "drafts") return st.drafts.has(s.user_id);
+      return true;
+    });
+  }
+
+  function renderStyle() {
+    renderQueue();
+    renderDetail();
+    renderStyleFooter();
+  }
+
+  function renderQueue() {
+    const d = st.data;
+    const list = queueStudents();
+    $("countTodo").textContent = d.students.filter(isTodo).length;
+    $("countDrafts").textContent = st.drafts.size;
+    $("countAllStudents").textContent = d.students.length;
+    document.querySelectorAll(".chip[data-sfilter]").forEach((c) => c.classList.toggle("active", c.dataset.sfilter === st.filter));
+    $("queueList").innerHTML = list.length ? list.map((s) => {
+      const status = statusOf(s);
+      return `<li><button type="button" class="queue-item${s.user_id === st.current ? " active" : ""}" data-user="${s.user_id}">
+        <span class="who"><div class="student-name">${esc(s.name || s.email)}</div><div class="student-email">${esc(s.email)}</div></span>
+        <span class="badge ${status.cls}">${esc(status.text)}</span></button></li>`;
+    }).join("") : `<li class="queue-empty">${st.filter === "todo" ? "Everyone here has a style mark or a draft." : "No students match."}</li>`;
+    $("queueSelect").innerHTML = list.map((s) => `<option value="${s.user_id}"${s.user_id === st.current ? " selected" : ""}>${esc(s.name || s.email)} · ${esc(statusOf(s).text)}</option>`).join("");
+    $("queueNote").hidden = !d.no_submission;
+    $("queueNote").textContent = d.no_submission
+      ? `${plural(d.no_submission, "student")} with no submission ${d.no_submission === 1 ? "isn't" : "aren't"} listed.` : "";
+    $("queueList").querySelector(".queue-item.active")?.scrollIntoView({ block: "nearest" });
+  }
+
+  function renderDetail() {
+    const box = $("styleDetail");
+    const s = currentStudent();
+    if (!s) {
+      box.innerHTML = '<div class="code-empty">No students with submissions on this slide yet.</div>';
+      return;
+    }
+    const list = queueStudents();
+    const pos = list.findIndex((x) => x.user_id === s.user_id);
+    const c = st.data.challenge;
+    const sid = currentSubmissionId(s);
+    const options = s.submissions.map((sub, i) => `<option value="${sub.id}"${sub.id === sid ? " selected" : ""}>${
+      i === 0 ? "Latest" : `#${s.submissions.length - i}`} · ${esc(when(sub.created_at))}${
+      sub.total != null ? ` · ${sub.passed}/${sub.total} tests` : ""}</option>`).join("");
+    box.innerHTML = `
+      <div class="detail-head">
+        <div class="who"><div class="student-name">${esc(s.name || s.email)}</div><div class="student-email">${esc(s.email)}</div></div>
+        <div class="detail-nav">
+          <button class="btn ghost sm" type="button" data-nav="-1" title="Previous student (K)" aria-label="Previous student"${pos <= 0 ? " disabled" : ""}>↑</button>
+          <span>${pos >= 0 ? `${pos + 1} of ${list.length}` : ""}</span>
+          <button class="btn ghost sm" type="button" data-nav="1" title="Next student (J)" aria-label="Next student"${pos < 0 || pos >= list.length - 1 ? " disabled" : ""}>↓</button>
+        </div>
+      </div>
+      <div class="detail-meta">
+        ${s.submissions.length ? `<label>Submission <select id="submissionSelect">${options}</select></label>` : "<span>No submissions</span>"}
+        <span>Tests <b>${fmt(s.auto_mark)}</b> / ${fmt(c.auto_points)}</span>
+        <span>Style in Ed <b>${s.graded ? fmt(s.rubric_mark) : "—"}</b> / ${fmt(c.rubric_points)}</span>
+        ${s.mark_override != null ? `<span class="warn-text">Mark overridden in Ed: ${fmt(s.mark_override)}</span>` : ""}
+        ${s.error ? `<span class="err-text">${esc(s.error)}</span>` : ""}
+      </div>
+      <div class="detail-body">
+        <div class="code-box" id="codeBox"></div>
+        <div class="rubric-col"><div class="rubric-box" id="rubricBox"></div><div class="draft-bar" id="draftBar"></div></div>
+      </div>`;
+    renderCode();
+    renderRubric();
+    if (sid) ensureFiles(sid).then(prefetchNext);
+  }
+
+  async function ensureFiles(sid) {
+    if (!sid || st.files.has(sid)) return;
+    st.files.set(sid, "loading");
+    try {
+      const { files } = await api("GET", `/api/style/submissions/${encodeURIComponent(sid)}/files`);
+      st.files.set(sid, { files });
+    } catch (e) {
+      st.files.set(sid, { error: e.message });
+    }
+    if (currentSubmissionId(currentStudent()) === sid) renderCode();
+  }
+
+  function prefetchNext() {
+    const list = queueStudents();
+    const next = list[list.findIndex((x) => x.user_id === st.current) + 1];
+    if (next) ensureFiles(currentSubmissionId(next));
+  }
+
+  function renderCode() {
+    const box = $("codeBox");
+    const s = currentStudent();
+    if (!box || !s) return;
+    const sid = currentSubmissionId(s);
+    const entry = sid ? st.files.get(sid) : null;
+    if (!sid) {
+      box.innerHTML = '<div class="code-empty">This student has no submission.</div>';
+      return;
+    }
+    if (!entry || entry === "loading") {
+      box.innerHTML = '<div class="code-empty"><span class="spinner on" aria-hidden="true"></span>Opening the submission on Ed\'s code server…</div>';
+      return;
+    }
+    if (entry.error) {
+      box.innerHTML = `<div class="code-empty"><span class="err-text">${esc(entry.error)}</span><button class="btn sm" type="button" data-act="retry-code">Try again</button></div>`;
+      return;
+    }
+    const files = entry.files || [];
+    if (!files.length) {
+      box.innerHTML = '<div class="code-empty">No files in this submission.</div>';
+      return;
+    }
+    st.fileTab = Math.min(st.fileTab, files.length - 1);
+    const f = files[st.fileTab];
+    const tabs = `<div class="file-tabs" role="tablist">${files.map((x, i) => `<button type="button" class="file-tab${
+      i === st.fileTab ? " active" : ""}" data-tab="${i}" role="tab" aria-selected="${i === st.fileTab}">${esc(x.path)}</button>`).join("")}</div>`;
+    const code = f.content == null
+      ? `<div class="code-empty err-text">${esc(f.error || "Couldn't read this file.")}</div>`
+      : `<pre class="code" tabindex="0" aria-label="${esc(f.path)}"><code>${f.content.replace(/\n$/, "").split("\n")
+        .map((line) => `<span class="line">${esc(line) || " "}</span>`).join("")}</code></pre>${
+        f.error ? `<div class="code-empty warn-text">${esc(f.error)}</div>` : ""}`;
+    box.innerHTML = tabs + code;
+  }
+
+  function renderRubric() {
+    const box = $("rubricBox");
+    const s = currentStudent();
+    if (!box || !s) return;
+    const r = st.data.rubric;
+    if (!r) {
+      box.innerHTML = '<p class="rubric-note">This slide has no rubric in Ed, so there\'s nothing to grade here.</p>';
+      renderDraftBar(s);
+      return;
+    }
+    const sel = selectionOf(s);
+    const inEd = new Set(s.selected_ids);
+    let n = 0;
+    const itemHTML = (item, section) => {
+      n += 1;
+      const on = sel.has(item.id);
+      return `<button type="button" class="rubric-item${on ? " selected" : ""}" data-item="${item.id}" aria-pressed="${on}"${s.lesson_mark_id ? "" : " disabled"}>
+        <span class="pick ${section?.select_one ? "radio" : "check"}" aria-hidden="true"></span>
+        <span class="body"><span class="title">${n <= 9 ? `<span class="muted">${n}.</span> ` : ""}${esc(item.title || "(untitled item)")}</span>${
+          item.description ? `<span class="desc">${esc(item.description)}</span>` : ""}${
+          inEd.has(item.id) ? '<span class="in-ed">✓ selected in Ed</span>' : ""}</span>
+        <span class="pts${item.points < 0 ? " neg" : ""}">${signed(item.points)}</span>
+      </button>`;
+    };
+    const parts = r.sections.map((section) => `<div class="rubric-section"><div class="section-head"><h4>${esc(section.title || "Rubric")}</h4>${
+      section.select_one ? "<span>pick one</span>" : ""}</div>${section.items.map((i) => itemHTML(i, section)).join("")}</div>`);
+    if (r.loose_items.length) {
+      parts.push(`<div class="rubric-section"><div class="section-head"><h4>${r.sections.length ? "Other" : "Rubric"}</h4></div>${
+        r.loose_items.map((i) => itemHTML(i, null)).join("")}</div>`);
+    }
+    const note = s.lesson_mark_id ? "" : '<p class="rubric-note">Ed has no marking record for this student yet, so a style mark can\'t be saved.</p>';
+    box.innerHTML = note + parts.join("");
+    renderDraftBar(s);
+  }
+
+  function renderDraftBar(s) {
+    const bar = $("draftBar");
+    if (!bar) return;
+    bar.hidden = !st.data.rubric || !s.lesson_mark_id;
+    if (bar.hidden) return;
+    const draft = st.drafts.get(s.user_id);
+    const sel = selectionOf(s);
+    bar.innerHTML = `
+      <span>${draft ? "Draft" : "Selected"}: <b>${sel.size ? signed(pointsOf(sel)) : "nothing"}</b></span>
+      <span>Ed now: <b>${s.graded ? fmt(s.rubric_mark) : "not graded"}</b></span>
+      <span class="spacer"></span>
+      ${draft ? '<button class="btn ghost sm" type="button" data-act="reset-draft">Reset to Ed</button>' : ""}
+      <button class="btn sm" type="button" data-act="next">Next student ↓</button>
+      <span class="kbd-hint">J/K move · 1–9 pick</span>`;
+  }
+
+  function showStudent(uid) {
+    if (!st.byId.has(uid)) return;
+    st.current = uid;
+    st.fileTab = 0;
+    renderQueue();
+    renderDetail();
+  }
+
+  function moveStudent(delta) {
+    const list = queueStudents();
+    const next = list[list.findIndex((x) => x.user_id === st.current) + delta];
+    if (next) showStudent(next.user_id);
+  }
+
+  function toggleItem(itemId) {
+    const s = currentStudent();
+    if (!s || !s.lesson_mark_id || !st.items.has(itemId)) return;
+    const sel = new Set(selectionOf(s));
+    const { section } = st.items.get(itemId);
+    if (sel.has(itemId)) {
+      sel.delete(itemId);
+    } else {
+      if (section?.select_one) section.items.forEach((i) => sel.delete(i.id));
+      sel.add(itemId);
+    }
+    if (sameSet(sel, s.selected_ids)) st.drafts.delete(s.user_id);
+    else st.drafts.set(s.user_id, sel);
+    renderRubric();
+    renderQueue();
+    renderStyleFooter();
+  }
+
+  function draftRows() {
+    return [...st.drafts].map(([uid, sel]) => ({ s: st.byId.get(uid), sel }))
+      .filter((r) => r.s && r.s.lesson_mark_id && !sameSet(r.sel, r.s.selected_ids));
+  }
+
+  function renderStyleFooter() {
+    if (!st.data) return;
+    const drafts = draftRows().length;
+    const todo = st.data.students.filter(isTodo).length;
+    const graded = st.data.students.filter((s) => s.graded).length;
+    $("styleSummary").innerHTML = `<b>${drafts}</b> draft${drafts === 1 ? "" : "s"} · <b>${todo}</b> to grade · <b>${graded}</b> graded in Ed`;
+    const btn = $("styleWriteBtn");
+    btn.disabled = !drafts;
+    btn.textContent = drafts ? `Review ${plural(drafts, "draft")}` : "Review drafts";
+  }
+
+  async function refreshStyleBackups() {
+    if (!st.challengeId) return;
+    try {
+      const { backups } = await api("GET", `/api/backups?assignment_id=${st.challengeId}&kind=style`);
+      st.backups = backups;
+    } catch {
+      st.backups = [];
+    }
+    const last = st.backups.find((b) => !b.reverted_at);
+    $("styleRevertBtn").disabled = !last;
+    $("styleRevertBtn").title = last
+      ? `Put back the rubric selections from before the write ${when(last.created_at)}`
+      : "No style write to revert on this slide";
+  }
+
+  function itemsLabel(ids) {
+    const list = [...(ids || [])];
+    if (!list.length) return "nothing selected";
+    return list.map((id) => {
+      const item = st.items.get(id)?.item;
+      return item ? `${shortText(item.title, 38)} (${signed(item.points)})` : `item ${id}`;
+    }).join(", ");
+  }
+
+  // ---------- style: write to Ed
+
+  function openStyleWrite() {
+    const rows = draftRows();
+    if (!rows.length) return;
+    sw = { rows, selected: new Set(rows.map((r) => r.s.user_id)), running: false, retry: [] };
+    renderStyleWrite();
+    $("styleWriteDialog").showModal();
+  }
+
+  function renderStyleWrite() {
+    $("styleWriteTitle").textContent = "Write style grades to Ed";
+    const rows = sw.rows.map(({ s, sel }) => {
+      const checked = sw.selected.has(s.user_id);
+      return `<tr class="${checked ? "" : "unchecked"}">
+        <td class="col-check"><input type="checkbox" data-user="${s.user_id}" ${checked ? "checked" : ""} aria-label="Include ${esc(s.name)}"></td>
+        <td>${esc(s.name || s.email)}<span class="sub">${esc(s.email)}</span></td>
+        <td>${esc(itemsLabel(s.selected_ids))}<span class="sub">${s.graded ? `Ed: ${fmt(s.rubric_mark)}` : "Ed: not graded"}</span></td>
+        <td class="arrow">→</td>
+        <td class="new">${esc(itemsLabel(sel))}<span class="sub">${signed(pointsOf(sel))} pts</span></td>
+      </tr>`;
+    }).join("");
+    $("styleWriteBody").innerHTML = `
+      <div class="info-list"><div class="info">Selects these rubric items on each student's marking record in Ed, the same as ticking them in Ed's marking panel. Ed's current selections are backed up first, and anyone graded in Ed since you loaded this slide is skipped.</div></div>
+      <div class="list-head"><span class="muted">${plural(sw.rows.length, "draft")}</span>
+        <div class="links"><button class="btn ghost xs" type="button" data-select="all">Select all</button><button class="btn ghost xs" type="button" data-select="none">None</button></div></div>
+      <table class="change-table"><thead><tr><th class="col-check"></th><th>Student</th><th>In Ed now</th><th></th><th>New</th></tr></thead><tbody>${rows}</tbody></table>`;
+    renderStyleWriteFoot();
+  }
+
+  function renderStyleWriteFoot() {
+    const n = sw.rows.filter((r) => sw.selected.has(r.s.user_id)).length;
+    $("styleWriteFoot").innerHTML = `
+      <label class="confirm-box"><input type="checkbox" id="confirmStyleWrite" ${n ? "" : "disabled"}> I've checked ${n === 1 ? "this grade" : `these ${n} grades`}</label>
+      <span class="spacer"></span>
+      <button class="btn ghost" type="button" data-close>Cancel</button>
+      <button class="btn primary" type="button" id="doStyleWrite" disabled>Write ${plural(n, "grade")} to Ed</button>`;
+  }
+
+  async function startStyleWrite(rows) {
+    sw.running = true;
+    const btn = $("doStyleWrite");
+    if (btn) { btn.disabled = true; btn.textContent = "Backing up…"; }
+    let started;
+    try {
+      started = await api("POST", "/api/style/write", {
+        challenge_id: st.challengeId,
+        grades: rows.map(({ s, sel }) => ({ user_id: s.user_id, lesson_mark_id: s.lesson_mark_id, select: [...sel], expected: s.selected_ids })),
+      });
+    } catch (e) {
+      sw.running = false;
+      toast(e.message, "error");
+      renderStyleWriteFoot();
+      return;
+    }
+    const skipped = new Set(started.skipped.map((x) => x.user_id));
+    const lines = rows.filter((r) => !skipped.has(r.s.user_id)).map((r) => ({
+      user_id: r.s.user_id,
+      name: r.s.name || r.s.email,
+      detail: `${r.s.graded ? fmt(r.s.rubric_mark) : "—"} → ${signed(pointsOf(r.sel))}`,
+      row: r,
+    }));
+    $("styleWriteTitle").textContent = "Writing to Ed";
+    let job;
+    try {
+      job = await pollJob(started.job_id, (j) => renderProgress("styleWrite", j, lines, started.skipped, "Writing"));
+    } catch (e) {
+      sw.running = false;
+      toast(`Lost track of the write: ${e.message}. Reload to see what landed.`, "error");
+      return;
+    }
+    sw.running = false;
+    for (const res of job.results) st.results.set(res.user_id, res);
+    const failed = job.results.filter((r) => !r.ok);
+    $("styleWriteTitle").textContent = failed.length ? "Write finished with errors" : "Written to Ed";
+    renderProgress("styleWrite", job, lines, started.skipped, "Wrote");
+    sw.retry = lines.filter((l) => failed.some((f) => f.user_id === l.user_id)).map((l) => l.row);
+    $("styleWriteFoot").innerHTML = `<span class="muted">Backup saved. “Revert last write” puts Ed's previous selections back.</span><span class="spacer"></span>
+      ${failed.length ? `<button class="btn" type="button" id="retryStyleWrite">Retry ${plural(failed.length, "failed grade")}</button>` : ""}
+      <button class="btn primary" type="button" data-close data-reload>Done</button>`;
+    toast(failed.length ? `${job.results.length - failed.length} written, ${failed.length} failed.`
+      : `${plural(job.results.length, "style grade")} written to Ed.`, failed.length ? "warn" : "ok");
+  }
+
+  // ---------- style: revert
+
+  async function openStyleRevert() {
+    const last = st.backups.find((b) => !b.reverted_at);
+    if (!last) return;
+    srv = { backup: last, running: false, preview: null };
+    $("styleRevertTitle").textContent = "Revert last style write";
+    $("styleRevertBody").innerHTML = '<div class="empty-msg">Checking Ed\'s current selections…</div>';
+    $("styleRevertFoot").innerHTML = '<span class="spacer"></span><button class="btn ghost" type="button" data-close>Cancel</button>';
+    $("styleRevertDialog").showModal();
+    try {
+      srv.preview = await api("POST", "/api/style/revert/preview", { backup_id: last.id });
+      renderStyleRevert();
+    } catch (e) {
+      $("styleRevertBody").innerHTML = `<div class="empty-msg">${esc(e.message)}</div>`;
+    }
+  }
+
+  function renderStyleRevert() {
+    const { backup, rows } = srv.preview;
+    const todo = rows.filter((r) => r.differs);
+    const drifted = todo.filter((r) => r.changed_since).length;
+    $("styleRevertBody").innerHTML = `
+      <div class="info-list"><div class="info">Puts back the rubric selections Ed had right before the write on <b>${esc(when(backup.created_at))}</b>. A new backup is saved first.</div>
+        ${drifted ? `<div class="warning">${plural(drifted, "student")} changed in Ed after that write. Reverting will overwrite ${drifted === 1 ? "it" : "them"}.</div>` : ""}</div>
+      <table class="change-table"><thead><tr><th>Student</th><th>In Ed now</th><th></th><th>Restore to</th></tr></thead><tbody>${rows.map((r) => `<tr class="${r.differs ? "" : "unchecked"}">
+        <td>${esc(r.name)}${r.changed_since ? '<span class="sub warn-text">changed in Ed since the write</span>' : ""}${r.differs ? "" : '<span class="sub">already matches</span>'}</td>
+        <td>${esc(itemsLabel(r.current))}</td><td class="arrow">→</td><td class="new">${esc(itemsLabel(r.restore))}</td></tr>`).join("")}</tbody></table>`;
+    $("styleRevertFoot").innerHTML = todo.length ? `
+      <label class="confirm-box"><input type="checkbox" id="confirmStyleRevert"> Restore ${plural(todo.length, "student")}</label>
+      <span class="spacer"></span>
+      <button class="btn ghost" type="button" data-close>Cancel</button>
+      <button class="btn danger" type="button" id="doStyleRevert" disabled>Revert ${plural(todo.length, "student")}</button>`
+      : '<span class="muted">Ed already matches the backup.</span><span class="spacer"></span><button class="btn" type="button" data-close>Close</button>';
+  }
+
+  async function startStyleRevert() {
+    const { backup, rows } = srv.preview;
+    srv.running = true;
+    $("doStyleRevert").disabled = true;
+    let started;
+    try {
+      started = await api("POST", "/api/style/revert", { backup_id: backup.id });
+    } catch (e) {
+      srv.running = false;
+      toast(e.message, "error");
+      renderStyleRevert();
+      return;
+    }
+    const lines = rows.filter((r) => r.differs).map((r) => ({
+      user_id: r.user_id, name: r.name, detail: `${shortText(itemsLabel(r.current), 30)} → ${shortText(itemsLabel(r.restore), 30)}`,
+    }));
+    $("styleRevertTitle").textContent = "Reverting";
+    let job;
+    try {
+      job = await pollJob(started.job_id, (j) => renderProgress("styleRevert", j, lines, [], "Restoring"));
+    } catch (e) {
+      srv.running = false;
+      toast(`Lost track of the revert: ${e.message}`, "error");
+      return;
+    }
+    srv.running = false;
+    const failed = job.results.filter((r) => !r.ok).length;
+    $("styleRevertTitle").textContent = failed ? "Revert finished with errors" : "Revert complete";
+    renderProgress("styleRevert", job, lines, [], "Restored");
+    $("styleRevertFoot").innerHTML = `<span class="muted">${failed ? "Run Revert again to retry the failed ones." : "Selections restored."}</span>
+      <span class="spacer"></span><button class="btn primary" type="button" data-close data-reload>Done</button>`;
+    st.results.clear();
+    toast(failed ? `Revert: ${failed} failed.` : "Last style write reverted.", failed ? "warn" : "ok");
+  }
+
+  function bindStyleEvents() {
+    document.querySelectorAll(".mode").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+    $("styleSlide").addEventListener("change", updateLoadButton);
+    document.querySelectorAll(".chip[data-sfilter]").forEach((c) => c.addEventListener("click", () => {
+      st.filter = c.dataset.sfilter;
+      renderQueue();
+      renderDetail();
+    }));
+    $("styleSearch").addEventListener("input", (e) => { st.search = e.target.value; renderQueue(); });
+    $("queueList").addEventListener("click", (e) => {
+      const row = e.target.closest("[data-user]");
+      if (row) showStudent(Number(row.dataset.user));
+    });
+    $("queueSelect").addEventListener("change", (e) => showStudent(Number(e.target.value)));
+
+    const detail = $("styleDetail");
+    detail.addEventListener("click", (e) => {
+      const item = e.target.closest("[data-item]");
+      if (item) { toggleItem(Number(item.dataset.item)); return; }
+      const nav = e.target.closest("[data-nav]");
+      if (nav) { moveStudent(Number(nav.dataset.nav)); return; }
+      const tab = e.target.closest("[data-tab]");
+      if (tab) { st.fileTab = Number(tab.dataset.tab); renderCode(); return; }
+      const act = e.target.closest("[data-act]")?.dataset.act;
+      if (act === "next") moveStudent(1);
+      else if (act === "reset-draft") {
+        st.drafts.delete(st.current);
+        renderRubric();
+        renderQueue();
+        renderStyleFooter();
+      } else if (act === "retry-code") {
+        const sid = currentSubmissionId(currentStudent());
+        st.files.delete(sid);
+        renderCode();
+        ensureFiles(sid);
+      }
+    });
+    detail.addEventListener("change", (e) => {
+      if (e.target.id !== "submissionSelect") return;
+      const sid = Number(e.target.value);
+      st.submission.set(st.current, sid);
+      st.fileTab = 0;
+      renderCode();
+      ensureFiles(sid);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (state.mode !== "style" || !st.data || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (document.querySelector("dialog[open]")) return;
+      if (e.target instanceof Element && e.target.closest("input, select, textarea")) return;
+      const key = e.key.toLowerCase();
+      if (key === "j") { e.preventDefault(); moveStudent(1); }
+      else if (key === "k") { e.preventDefault(); moveStudent(-1); }
+      else if (/^[1-9]$/.test(key)) {
+        const item = orderedItems()[Number(key) - 1];
+        if (item) { e.preventDefault(); toggleItem(item.id); }
+      }
+    });
+
+    $("styleWriteBtn").addEventListener("click", openStyleWrite);
+    const wd = $("styleWriteDialog");
+    wd.addEventListener("change", (e) => {
+      if (e.target.matches("input[data-user]")) {
+        const uid = Number(e.target.dataset.user);
+        if (e.target.checked) sw.selected.add(uid);
+        else sw.selected.delete(uid);
+        e.target.closest("tr").classList.toggle("unchecked", !e.target.checked);
+        renderStyleWriteFoot();
+      } else if (e.target.id === "confirmStyleWrite") {
+        $("doStyleWrite").disabled = !e.target.checked;
+      }
+    });
+    wd.addEventListener("click", (e) => {
+      const pick = e.target.closest("[data-select]");
+      if (pick) {
+        const all = pick.dataset.select === "all";
+        sw.rows.forEach((r) => (all ? sw.selected.add(r.s.user_id) : sw.selected.delete(r.s.user_id)));
+        renderStyleWrite();
+        return;
+      }
+      if (e.target.id === "doStyleWrite") startStyleWrite(sw.rows.filter((r) => sw.selected.has(r.s.user_id)));
+      else if (e.target.id === "retryStyleWrite") startStyleWrite(sw.retry);
+    });
+    $("styleRevertBtn").addEventListener("click", openStyleRevert);
+    const rvd = $("styleRevertDialog");
+    rvd.addEventListener("change", (e) => {
+      if (e.target.id === "confirmStyleRevert") $("doStyleRevert").disabled = !e.target.checked;
+    });
+    rvd.addEventListener("click", (e) => { if (e.target.id === "doStyleRevert") startStyleRevert(); });
+    for (const dlg of [wd, rvd]) {
+      dlg.addEventListener("close", () => {
+        if (dlg.returnValue === "reload" && st.challengeId) loadStyle(st.challengeId);
+        dlg.returnValue = "";
+      });
+    }
   }
 
   // ---------- start
@@ -1233,6 +1926,7 @@
   async function init() {
     applyTheme(storage.get(THEME_KEY));
     bindEvents();
+    setMode(storage.get("ezgrader.mode") || "canvas");
     try {
       await refreshProfiles();
     } catch (e) {

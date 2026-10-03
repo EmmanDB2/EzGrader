@@ -10,6 +10,11 @@ from .ed_parser import looks_like_results_csv
 
 ED_REGION = os.environ.get("ED_REGION", "us")
 ED_BASE = f"https://{ED_REGION}.edstem.org/api"
+# Ed's code server for the region (workspaceWebSocketUrl in Ed's own app settings).
+ED_WS_BASE = f"wss://sahara.{ED_REGION}.edstem.org"
+
+# What Ed's site sends when you open a submission's code.
+CONNECT_PAYLOAD = {"user_id": None, "password": None, "i": None}
 
 # completions MUST be 0: with completions=1 the cells are timestamps, not scores.
 RESULTS_PARAMS = {
@@ -55,9 +60,9 @@ class EdClient:
             raise EdError(explain(resp))
         return resp
 
-    def _json(self, path: str) -> dict:
+    def _json(self, path: str, method: str = "GET", **kwargs):
         try:
-            return self._call("GET", path).json()
+            return self._call(method, path, **kwargs).json()
         except ValueError:
             raise EdError("Ed sent back something that isn't JSON.") from None
 
@@ -108,3 +113,53 @@ class EdClient:
                 "Check that you can open this lesson's results in Ed."
             )
         return text
+
+
+    # ---------- style grading (code challenges and their rubrics)
+
+    def lesson(self, lesson_id: int) -> dict:
+        data = self._json(f"/lessons/{int(lesson_id)}")
+        return data.get("lesson") or data
+
+    def challenge(self, challenge_id: int) -> dict:
+        data = self._json(f"/challenges/{int(challenge_id)}")
+        return data.get("challenge") or data
+
+    def challenge_users(self, challenge_id: int) -> list[dict]:
+        data = self._json(f"/challenges/{int(challenge_id)}/users")
+        users = data.get("users") if isinstance(data, dict) else data
+        return users if isinstance(users, list) else []
+
+    def user_submissions(self, user_id: int, challenge_id: int) -> list[dict]:
+        data = self._json(f"/users/{int(user_id)}/challenges/{int(challenge_id)}/submissions")
+        subs = data.get("submissions") if isinstance(data, dict) else data
+        return subs if isinstance(subs, list) else []
+
+    def rubric(self, rubric_id: int) -> dict:
+        data = self._json(f"/rubrics/{int(rubric_id)}")
+        return data.get("rubric") or data
+
+    def lesson_mark(self, mark_id: int) -> dict:
+        """{"lesson_mark": {auto_mark, rubric_mark, mark_override, ...}, "selected_rubric_items": [ids]}"""
+        return self._json(f"/lesson_marks/{int(mark_id)}", params={"rubric_items": "true"})
+
+    def selected_rubric_items(self, mark_id: int) -> list[int]:
+        data = self._json(f"/rubrics/selected/{int(mark_id)}")
+        ids = data.get("ids") if isinstance(data, dict) else data
+        return sorted(int(i) for i in ids or [])
+
+    def set_rubric_items(self, mark_id: int, items: dict[int, bool]) -> dict:
+        """Select (True) or clear (False) rubric items on a marking record, as Ed's marking
+        panel does. Ed replies with the recalculated lesson_mark and the selected ids."""
+        payload = {"items": {str(int(k)): bool(v) for k, v in items.items()}}
+        return self._json(f"/rubrics/selected/{int(mark_id)}", method="PUT", json=payload)
+
+    def connect_submission(self, submission_id: int) -> str:
+        """Ask Ed to open a temporary copy of a submission on its code server, as the browser
+        does when you click on one. Returns the one-time ticket for the code server."""
+        data = self._json(f"/challenges/submissions/{int(submission_id)}/connect", method="POST",
+                          json=CONNECT_PAYLOAD)
+        ticket = data.get("ticket") if isinstance(data, dict) else None
+        if not ticket:
+            raise EdError("Ed didn't return a code-server ticket for this submission.")
+        return ticket

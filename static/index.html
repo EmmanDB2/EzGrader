@@ -18,6 +18,10 @@
       <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" class="logo-bg"/><path d="M9 16.5l4.5 4.5L23 11.5" class="logo-check"/></svg>
       <div class="brand-text"><strong>EzGrader</strong><span>Ed → Canvas</span></div>
     </div>
+    <div class="mode-switch" role="tablist" aria-label="Mode">
+      <button class="mode" type="button" role="tab" data-mode="style">Style grading</button>
+      <button class="mode" type="button" role="tab" data-mode="canvas">Canvas sync</button>
+    </div>
     <div class="topbar-actions">
       <label class="profile-pill" title="Profile">
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2"/><path d="M3.8 16.5c1-3 3.4-4.5 6.2-4.5s5.2 1.5 6.2 4.5"/></svg>
@@ -42,7 +46,8 @@
       <div class="route">
         <span class="route-part"><span class="tag ed">Ed</span><span id="sumLesson"></span></span>
         <svg viewBox="0 0 20 20" class="route-arrow" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4"/></svg>
-        <span class="route-part"><span class="tag cv">Canvas</span><span id="sumAssignment"></span></span>
+        <span class="route-part canvas-only"><span class="tag cv">Canvas</span><span id="sumAssignment"></span></span>
+        <span class="route-part style-only"><span class="tag slide">Slide</span><span id="sumSlide"></span></span>
       </div>
       <div class="setup-summary-actions">
         <button id="reloadBtn" class="btn ghost sm" type="button" title="Fetch fresh data from Ed and Canvas">
@@ -56,8 +61,9 @@
       <div class="setup-grid">
         <div class="field"><label for="edCourse"><span class="tag ed">Ed</span> Course</label><select id="edCourse" disabled></select></div>
         <div class="field"><label for="edLesson"><span class="tag ed">Ed</span> Lesson</label><select id="edLesson" disabled></select></div>
-        <div class="field"><label for="cvCourse"><span class="tag cv">Canvas</span> Course</label><select id="cvCourse" disabled></select></div>
-        <div class="field"><label for="cvAssignment"><span class="tag cv">Canvas</span> Assignment</label><select id="cvAssignment" disabled></select></div>
+        <div class="field canvas-only"><label for="cvCourse"><span class="tag cv">Canvas</span> Course</label><select id="cvCourse" disabled></select></div>
+        <div class="field canvas-only"><label for="cvAssignment"><span class="tag cv">Canvas</span> Assignment</label><select id="cvAssignment" disabled></select></div>
+        <div class="field style-only"><label for="styleSlide"><span class="tag ed">Ed</span> Code slide</label><select id="styleSlide" disabled></select></div>
       </div>
       <div class="setup-actions">
         <button id="loadBtn" class="btn primary" type="submit" disabled>
@@ -68,7 +74,7 @@
   </section>
 
   <!-- Toolbar -->
-  <section class="toolbar" id="toolbar" hidden>
+  <section class="toolbar canvas-only" id="toolbar" hidden>
     <div class="toolbar-row">
       <div class="tabs" role="tablist">
         <button class="tab active" type="button" data-view="grades" role="tab">Grades <span class="count" id="countGrades">0</span></button>
@@ -125,6 +131,27 @@
       <div class="no-rows" id="noRows" hidden>No students match this filter.</div>
     </div>
 
+    <div class="style-view" id="styleView" hidden>
+      <aside class="style-queue">
+        <div class="queue-tools">
+          <div class="chips" role="group" aria-label="Show">
+            <button class="chip active" type="button" data-sfilter="todo">To grade <span class="count" id="countTodo">0</span></button>
+            <button class="chip" type="button" data-sfilter="drafts">Drafts <span class="count" id="countDrafts">0</span></button>
+            <button class="chip" type="button" data-sfilter="all">All <span class="count" id="countAllStudents">0</span></button>
+          </div>
+          <label class="search">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg>
+            <span class="sr-only">Search students</span>
+            <input id="styleSearch" type="search" placeholder="Search students" autocomplete="off" spellcheck="false">
+          </label>
+          <select id="queueSelect" class="queue-select" aria-label="Student"></select>
+        </div>
+        <ul class="queue-list" id="queueList"></ul>
+        <p class="queue-note" id="queueNote" hidden></p>
+      </aside>
+      <section class="style-detail" id="styleDetail" aria-live="polite"></section>
+    </div>
+
     <div class="unmatched" id="unmatchedView" hidden>
       <p class="note">These students can't be matched by email, so they're left out of the push. Students who are only in Canvas are never changed.</p>
       <div class="unmatched-grid">
@@ -142,12 +169,18 @@
 
   <!-- Bottom action bar -->
   <footer class="actionbar" id="actionbar" hidden>
-    <button id="revertBtn" class="btn ghost" type="button" disabled title="Put back the grades from before the last push">
+    <button id="revertBtn" class="btn ghost canvas-only" type="button" disabled title="Put back the grades from before the last push">
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 5L3.5 9l4 4"/><path d="M4 9h7.5a5 5 0 0 1 0 10H9"/></svg>
       <span>Revert last push</span>
     </button>
-    <div class="actionbar-summary" id="footerSummary"></div>
-    <button id="reviewBtn" class="btn primary" type="button" disabled>Review changes</button>
+    <div class="actionbar-summary canvas-only" id="footerSummary"></div>
+    <button id="reviewBtn" class="btn primary canvas-only" type="button" disabled>Review changes</button>
+    <button id="styleRevertBtn" class="btn ghost style-only" type="button" disabled title="Put back Ed's rubric selections from before the last write">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 5L3.5 9l4 4"/><path d="M4 9h7.5a5 5 0 0 1 0 10H9"/></svg>
+      <span>Revert last write</span>
+    </button>
+    <div class="actionbar-summary style-only" id="styleSummary"></div>
+    <button id="styleWriteBtn" class="btn primary style-only" type="button" disabled>Review drafts</button>
   </footer>
 </div>
 
@@ -242,6 +275,26 @@
   </header>
   <div class="modal-body" id="revertBody"></div>
   <footer class="modal-foot" id="revertFoot"></footer>
+</dialog>
+
+<!-- Style: write to Ed -->
+<dialog class="modal wide" id="styleWriteDialog" aria-labelledby="styleWriteTitle">
+  <header class="modal-head">
+    <h2 id="styleWriteTitle">Write style grades to Ed</h2>
+    <button class="btn ghost icon-only close" type="button" data-close aria-label="Close">✕</button>
+  </header>
+  <div class="modal-body" id="styleWriteBody"></div>
+  <footer class="modal-foot" id="styleWriteFoot"></footer>
+</dialog>
+
+<!-- Style: revert -->
+<dialog class="modal wide" id="styleRevertDialog" aria-labelledby="styleRevertTitle">
+  <header class="modal-head">
+    <h2 id="styleRevertTitle">Revert last style write</h2>
+    <button class="btn ghost icon-only close" type="button" data-close aria-label="Close">✕</button>
+  </header>
+  <div class="modal-body" id="styleRevertBody"></div>
+  <footer class="modal-foot" id="styleRevertFoot"></footer>
 </dialog>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>

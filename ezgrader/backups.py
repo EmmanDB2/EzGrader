@@ -13,7 +13,7 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
-ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9]+-[0-9]+-(push|revert)-[0-9a-f]{6}$")
+ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9]+-[0-9]+-(push|revert|style|style_revert)-[0-9a-f]{6}$")
 
 
 class BackupError(Exception):
@@ -72,7 +72,8 @@ class BackupStore:
         data["reverted_by"] = reverted_by
         self._write(self._path(backup_id), data)
 
-    def list(self, course_id: int | None = None, assignment_id: int | None = None) -> list[dict]:
+    def list(self, course_id: int | None = None, assignment_id: int | None = None,
+             kinds: set[str] | None = None) -> list[dict]:
         if not self.dir.exists():
             return []
         out = []
@@ -84,6 +85,8 @@ class BackupStore:
             if course_id is not None and data.get("course_id") != course_id:
                 continue
             if assignment_id is not None and data.get("assignment_id") != assignment_id:
+                continue
+            if kinds is not None and data.get("kind") not in kinds:
                 continue
             out.append({k: data.get(k) for k in (
                 "id", "kind", "created_at", "profile", "course_id", "assignment_id",
