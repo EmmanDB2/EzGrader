@@ -110,4 +110,5 @@ ezgrader/
 static/                 index.html, app.css, app.js (no framework, no CDN)
 tests/                  pytest suite + synthetic fixtures
 ed_probe.py, ed_sweep.py  original exploration scripts
+ed_code_probe.py        read-only check of what Ed returns for code-slide submissions
 ```

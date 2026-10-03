@@ -20,3 +20,6 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 .idea/
+
+# Probe output (safe to share, but not part of the code)
+probe*.txt

@@ -1,3 +1,4 @@
 flask>=3.0,<4
 requests>=2.31,<3
 keyring>=25,<26
+websocket-client>=1.6,<2

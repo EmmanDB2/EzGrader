@@ -76,8 +76,9 @@ class FakeSession:
         self.rules = list(rules or [])
         self.calls = []
 
-    def request(self, method, url, params=None, data=None, headers=None, timeout=None):
-        self.calls.append({"method": method, "url": url, "params": params, "data": data, "headers": headers})
+    def request(self, method, url, params=None, data=None, json=None, headers=None, timeout=None):
+        self.calls.append({"method": method, "url": url, "params": params, "data": data, "json": json,
+                           "headers": headers})
         for i, (m, prefix, resp) in enumerate(self.rules):
             if m == method and url.startswith(prefix):
                 if isinstance(resp, list):  # a sequence of responses, consumed in order

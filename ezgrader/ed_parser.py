@@ -95,7 +95,7 @@ def _norm(cell: str) -> str:
 
 
 def looks_like_results_csv(text: str) -> bool:
-    head = (text or "").lstrip("﻿ \t\r\n")[:1]
+    head = (text or "").lstrip("\ufeff \t\r\n")[:1]
     return bool(head) and head not in ("<", "{", "[")
 
 
@@ -106,7 +106,7 @@ def parse_results_csv(text: str) -> LessonResults:
             "The results endpoint may have changed, or the token can't see this lesson."
         )
 
-    rows = list(csv.reader(io.StringIO(text.lstrip("﻿"))))
+    rows = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
     if len(rows) < 2:
         raise ParseError("The Ed export has fewer than two header rows.")
 

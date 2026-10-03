@@ -91,7 +91,7 @@ def test_columns_found_by_name_not_position(homework_csv):
 
 
 def test_bom_and_crlf(lab_csv):
-    lesson = parse_results_csv("﻿" + lab_csv.replace("\n", "\r\n"))
+    lesson = parse_results_csv("\ufeff" + lab_csv.replace("\n", "\r\n"))
     assert lesson.total_max == 520
 
 
