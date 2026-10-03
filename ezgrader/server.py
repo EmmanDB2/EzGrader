@@ -13,6 +13,7 @@ import logging
 import math
 import secrets
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -21,17 +22,17 @@ from pathlib import Path
 from flask import Flask, Response, request
 from werkzeug.exceptions import HTTPException
 
-from . import grades, style
+from . import __version__, grades, style
 from .backups import BackupError, BackupStore
 from .canvas_client import CanvasClient, CanvasError, normalize_base_url
 from .code_server import CodeServerError, read_submission_files
 from .ed_client import EdClient, EdError
 from .ed_parser import ParseError, parse_results_csv
 from .keystore import KeyStore, ProfileError
+from .paths import data_dir, resource_dir
 
-ROOT = Path(__file__).resolve().parent.parent
-STATIC_DIR = ROOT / "static"
-BACKUP_DIR = ROOT / "backups"
+STATIC_DIR = resource_dir() / "static"
+BACKUP_DIR = data_dir() / "backups"
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
@@ -53,6 +54,10 @@ class Jobs:
     def __init__(self):
         self._jobs: dict[str, dict] = {}
         self._lock = threading.Lock()
+
+    def busy(self) -> bool:
+        with self._lock:
+            return any(j["status"] in ("preparing", "running") for j in self._jobs.values())
 
     def reserve(self, kind: str) -> str:
         with self._lock:
@@ -158,6 +163,27 @@ def landed(sub: dict, expected: float | None, pp: float) -> dict:
     return result
 
 
+class Activity:
+    """When a page last checked in. Monotonic, so time asleep doesn't count as idle."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.started = time.monotonic()
+        self.last: float | None = None
+
+    def touch(self) -> None:
+        with self._lock:
+            self.last = time.monotonic()
+
+    def idle_seconds(self) -> float:
+        with self._lock:
+            return time.monotonic() - (self.last if self.last is not None else self.started)
+
+    @property
+    def ever_seen(self) -> bool:
+        return self.last is not None
+
+
 def style_landed(reply: dict, expected_ids) -> dict:
     """Read back what Ed saved after a rubric PUT and compare with what we sent."""
     ids = sorted(int(i) for i in (reply or {}).get("ids") or [])
@@ -172,7 +198,7 @@ def style_landed(reply: dict, expected_ids) -> dict:
 
 def create_app(*, allowed_hosts: set[str], keystore: KeyStore | None = None,
                backup_dir: Path | None = None, session_token: str | None = None,
-               ed_factory=None, canvas_factory=None, code_reader=None) -> Flask:
+               ed_factory=None, canvas_factory=None, code_reader=None, on_quit=None) -> Flask:
     app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
     app.json.sort_keys = False
 
@@ -184,7 +210,8 @@ def create_app(*, allowed_hosts: set[str], keystore: KeyStore | None = None,
     canvas_factory = canvas_factory or (lambda base, token: CanvasClient(base, token))
     code_reader = code_reader or read_submission_files
     jobs = Jobs()
-    app.config["SESSION_TOKEN"] = session_token
+    activity = Activity()
+    app.config.update(SESSION_TOKEN=session_token, ACTIVITY=activity, JOBS=jobs)
 
     # ----- guards and headers
 
@@ -196,6 +223,7 @@ def create_app(*, allowed_hosts: set[str], keystore: KeyStore | None = None,
             sent = request.headers.get("X-EzGrader-Session", "")
             if not hmac.compare_digest(sent.encode(), session_token.encode()):
                 return {"error": "EzGrader was restarted. Reload this page.", "code": "session"}, 403
+            activity.touch()
         return None
 
     @app.after_request
@@ -276,6 +304,26 @@ def create_app(*, allowed_hosts: set[str], keystore: KeyStore | None = None,
         if not token:
             raise ApiError("This profile has no Canvas token yet. Add one under Keys.")
         return canvas_factory(base, token)
+
+    # ----- app lifecycle
+
+    @app.get("/health")
+    def health():
+        # Public (no session needed) so a second launch can find this one. No data here.
+        return {"app": "EzGrader", "version": __version__}
+
+    @app.post("/api/ping")
+    def ping():
+        return {"ok": True}  # the guard already recorded the visit
+
+    @app.post("/api/quit")
+    def quit_app():
+        if on_quit is None:
+            raise ApiError("Quit isn't available here. Stop EzGrader from the terminal with Ctrl+C.")
+        if jobs.busy():
+            raise ApiError("A push or write is still running. Quit when it's done.", 409)
+        threading.Timer(0.3, on_quit).start()  # reply first, then stop
+        return {"ok": True}
 
     # ----- page
 

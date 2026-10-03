@@ -12,7 +12,9 @@ ever sees `public_info`, which masks them to ••••last4.
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
 import threading
 
 import keyring
@@ -26,6 +28,22 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,39}$")
 
 class ProfileError(ValueError):
     pass
+
+
+def configure_keyring() -> None:
+    """Pick the OS keychain explicitly in the packaged app.
+
+    keyring normally discovers its backends through package metadata, which a frozen
+    app may not carry. From source this does nothing and keyring chooses as usual.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    if sys.platform == "darwin":
+        from keyring.backends import macOS
+        keyring.set_keyring(macOS.Keyring())
+    elif os.name == "nt":
+        from keyring.backends import Windows
+        keyring.set_keyring(Windows.WinVaultKeyring())
 
 
 def mask(secret: str | None) -> str | None:

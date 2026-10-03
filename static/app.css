@@ -728,3 +728,15 @@ pre.code .line::before {
   .code-box { display: flex; flex-direction: column; min-height: 0; }
   pre.code { flex: 1; }
 }
+
+/* ---------- app lifecycle */
+
+.stopped-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--flag-soft); border-bottom: 1px solid var(--flag-border);
+  color: var(--text); font-size: 13.5px; box-shadow: var(--shadow);
+}
+.quit-screen { min-height: 100vh; display: grid; place-content: center; gap: 6px; padding: 24px; text-align: center; }
+.quit-screen h1 { margin: 0; font-size: 22px; letter-spacing: -.01em; }
+.quit-screen p { margin: 0; color: var(--text-2); }

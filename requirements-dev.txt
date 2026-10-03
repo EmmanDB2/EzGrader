@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest>=8
+pyinstaller>=6.10    # scripts/build-mac.sh
+pillow>=10           # scripts/make_icons.py (only when the icon changes)

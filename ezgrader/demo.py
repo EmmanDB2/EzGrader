@@ -17,8 +17,9 @@ from keyring.errors import PasswordDeleteError
 
 from .canvas_client import CanvasError
 from .keystore import KeyStore
+from .paths import resource_dir
 
-FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
+FIXTURES = resource_dir() / "tests" / "fixtures"
 
 LESSONS = {
     178455: ("Homework 1", "homework_with_results.csv"),

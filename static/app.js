@@ -1237,7 +1237,10 @@
       } else if (act === "cancel") renderKeys();
     });
 
+    $("quitBtn").addEventListener("click", quitApp);
+    $("reloadPageBtn").addEventListener("click", () => location.reload());
     window.addEventListener("beforeunload", (e) => {
+      if (quitting) return;
       if (state.edits.size || st.drafts.size || review?.running || revert?.running || sw?.running || srv?.running) {
         e.preventDefault();
       }
@@ -1921,12 +1924,52 @@
     }
   }
 
+  // ---------- app lifecycle: the packaged app quits by itself once no page checks in
+
+  let quitting = false;
+
+  function showStopped(text) {
+    $("stoppedText").textContent = text;
+    $("stoppedBanner").hidden = false;
+  }
+
+  async function heartbeat() {
+    if (quitting) return;
+    try {
+      const res = await fetch("/api/ping", { method: "POST", headers: { "X-EzGrader-Session": SESSION }, cache: "no-store" });
+      if (res.status === 403) showStopped("EzGrader was restarted. Reload this page to keep working.");
+      else $("stoppedBanner").hidden = true;
+    } catch {
+      showStopped("EzGrader has stopped. Open it again, then reload this page.");
+    }
+  }
+
+  function startHeartbeat() {
+    heartbeat();
+    setInterval(heartbeat, 20000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) heartbeat(); });
+  }
+
+  async function quitApp() {
+    if ((state.edits.size || st.drafts.size) && !confirm("Quit EzGrader? Your unsaved edits and drafts will be lost.")) return;
+    try {
+      await api("POST", "/api/quit");
+    } catch (e) {
+      toast(e.message, "error");
+      return;
+    }
+    quitting = true;
+    document.body.innerHTML = '<main class="quit-screen"><h1>EzGrader has quit</h1>'
+      + "<p>You can close this tab. Open EzGrader again whenever you need it.</p></main>";
+  }
+
   // ---------- start
 
   async function init() {
     applyTheme(storage.get(THEME_KEY));
     bindEvents();
     setMode(storage.get("ezgrader.mode") || "canvas");
+    startHeartbeat();
     try {
       await refreshProfiles();
     } catch (e) {

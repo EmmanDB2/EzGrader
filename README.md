@@ -6,7 +6,31 @@ A small local web app that pulls lesson scores from EdStem, turns them into a sc
 - API tokens live in the **macOS Keychain**. The page only ever sees the last 4 characters.
 - Every push is **backed up first**, and **Revert last push** puts the old grades back.
 
-## Setup (once)
+## Easiest: Mac app
+
+No Python or setup needed (Apple Silicon Macs).
+
+1. Get `EzGrader-<version>-macOS-arm64.zip`, unzip it, and drag **EzGrader.app** into **Applications**.
+2. **First time only:** double-click EzGrader. macOS says it can't check the app for malware, because the app isn't signed with an Apple Developer account. Open **System Settings → Privacy & Security**, scroll down to the message about EzGrader, and click **Open Anyway**.
+3. From then on, double-click **EzGrader** and your browser opens on it.
+
+- There's no Dock icon. Quit with the **⏻** button at the top right, or just close the tab: EzGrader quits by itself a few minutes later (never in the middle of a push or write).
+- Opening EzGrader while it's already running brings its tab back instead of starting a second copy.
+- macOS may ask once whether EzGrader can use its Keychain items. Choose **Always Allow** (it may ask again after you update the app).
+- Backups and the app's log are in `~/Library/Application Support/EzGrader`.
+- To update, replace EzGrader.app with the new version. Your keys and backups stay.
+
+### Build the Mac app
+
+```bash
+scripts/build-mac.sh
+```
+
+This takes about 20 seconds and makes `dist/EzGrader.app` plus `dist/EzGrader-<version>-macOS-arm64.zip` to share. It reuses the `.venv` from the setup below, or creates one. A Windows version has to be built on Windows with `pyinstaller EzGrader.spec`.
+
+## Run from source
+
+### Setup (once)
 
 Needs Python 3.10+ (`python3 --version`).
 
@@ -17,7 +41,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Run
+### Run
 
 ```bash
 source .venv/bin/activate
@@ -91,7 +115,7 @@ Once the style marks are in Ed, switch to **Canvas sync** and load the lesson as
 
 | Path | What | In git? |
 |---|---|---|
-| `backups/` | JSON snapshots taken before each push, style write, and revert (names, emails, grades; mode 600) | **ignored** |
+| `backups/` | JSON snapshots taken before each push, style write, and revert (names, emails, grades; mode 600). The Mac app keeps them in `~/Library/Application Support/EzGrader/backups` | **ignored** |
 | `fixtures/` | Your real (anonymized) Ed exports | **ignored** |
 | `tests/fixtures/` | Synthetic exports with fake students | yes |
 
@@ -128,8 +152,11 @@ ezgrader/
   backups.py            pre-push backups for revert
   server.py             Flask JSON API + request guards + push/revert jobs
   demo.py               --demo fakes
+  paths.py              where files live (project folder, or the Mac app's support folder)
 static/                 index.html, app.css, app.js (no framework, no CDN)
 tests/                  pytest suite + synthetic fixtures
+EzGrader.spec           PyInstaller recipe for the app (scripts/build-mac.sh)
+assets/                 app icon (scripts/make_icons.py redraws it)
 ed_probe.py, ed_sweep.py  original exploration scripts
 ed_code_probe.py        read-only check of what Ed returns for code-slide submissions
 ```
